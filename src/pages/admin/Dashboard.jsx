@@ -25,6 +25,68 @@ const toDate = (ts) => {
   return null
 }
 
+// Normalize values for comparison — handles ALLCAPS, trailing spaces from Google Form
+const norm = (v) => (v || '').toLowerCase().trim()
+
+// Map of dirty ward strings (from Google Form) to canonical ward names
+// Key: normalized dirty value, Value: canonical name matching lgaData.js
+const WARD_ALIASES = {
+  'akwaihedi':  'Akwaihedi',
+  'ukpor2':     'Ukpor II',
+  'ukpor 2':    'Ukpor II',
+  'ukpor1':     'Ukpor I',
+  'ukpor 1':    'Ukpor I',
+  'ukpor3':     'Ukpor III',
+  'ukpor 3':    'Ukpor III',
+  'ukpor4':     'Ukpor IV',
+  'ukpor 4':    'Ukpor IV',
+  'ukpor5':     'Ukpor V',
+  'ukpor 5':    'Ukpor V',
+  'utuh':       'Utuh I',
+  'utuh1':      'Utuh I',
+  'utuh 1':     'Utuh I',
+  'utuh2':      'Utuh II',
+  'utuh 2':     'Utuh II',
+  'utuh3':      'Utuh III',
+  'utuh 3':     'Utuh III',
+  'otolo1':     'Otolo I',
+  'otolo 1':    'Otolo I',
+  'otolo2':     'Otolo II',
+  'otolo 2':    'Otolo II',
+  'otolo3':     'Otolo III',
+  'otolo 3':    'Otolo III',
+  'uruagu1':    'Uruagu I',
+  'uruagu 1':   'Uruagu I',
+  'uruagu2':    'Uruagu II',
+  'uruagu 2':   'Uruagu II',
+  'ekwulobia1': 'Ekwulobia I',
+  'ekwulobia 1':'Ekwulobia I',
+  'ekwulobia2': 'Ekwulobia II',
+  'ekwulobia 2':'Ekwulobia II',
+  'amichi1':    'Amichi I',
+  'amichi 1':   'Amichi I',
+  'amichi2':    'Amichi II',
+  'amichi 2':   'Amichi II',
+  'azigbo1':    'Azigbo I',
+  'azigbo 1':   'Azigbo I',
+  'azigbo2':    'Azigbo II',
+  'azigbo 2':   'Azigbo II',
+  'unubi1':     'Unubi I',
+  'unubi 1':    'Unubi I',
+  'unubi2':     'Unubi II',
+  'unubi 2':    'Unubi II',
+  'osumenyi1':  'Osumenyi I',
+  'osumenyi 1': 'Osumenyi I',
+  'osumenyi2':  'Osumenyi II',
+  'osumenyi 2': 'Osumenyi II',
+}
+
+// Resolve a stored ward value to its canonical form for comparison
+const resolveWard = (ward) => {
+  const n = norm(ward)
+  return WARD_ALIASES[n] ? norm(WARD_ALIASES[n]) : n
+}
+
 export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -68,19 +130,37 @@ export default function Dashboard() {
 
   const filtered = useMemo(() => {
     let data = [...records]
-    if (filters.lga) data = data.filter(r => r.lga === filters.lga)
-    if (filters.ward) data = data.filter(r => r.ward === filters.ward)
-    if (filters.pollingUnit) data = data.filter(r => r.pollingUnit?.toLowerCase().includes(filters.pollingUnit.toLowerCase()))
-    if (filters.source) data = data.filter(r =>
-      filters.source === 'google_form' ? r.source === 'google_form' : !r.source || r.source !== 'google_form'
-    )
-    if (filters.search) {
-      const s = filters.search.toLowerCase()
+
+    if (filters.lga) {
+      data = data.filter(r => norm(r.lga) === norm(filters.lga))
+    }
+    if (filters.ward) {
+      data = data.filter(r => resolveWard(r.ward) === norm(filters.ward))
+    }
+    if (filters.pollingUnit) {
+      const pu = norm(filters.pollingUnit)
+      data = data.filter(r => norm(r.pollingUnit).includes(pu))
+    }
+    if (filters.source) {
       data = data.filter(r =>
-        r.name?.toLowerCase().includes(s) ||
-        r.phone?.toLowerCase().includes(s) ||
-        r.nin?.toLowerCase().includes(s) ||
-        r.vin?.toLowerCase().includes(s)
+        filters.source === 'google_form'
+          ? r.source === 'google_form'
+          : !r.source || r.source !== 'google_form'
+      )
+    }
+    if (filters.search) {
+      const s = norm(filters.search)
+      data = data.filter(r =>
+        norm(r.name).includes(s) ||
+        norm(r.phone).replace(/\s/g, '').includes(s.replace(/\s/g, '')) ||
+        norm(r.nin).includes(s) ||
+        norm(r.vin).includes(s) ||
+        norm(r.lga).includes(s) ||
+        norm(r.ward).includes(s) ||
+        resolveWard(r.ward).includes(s) ||
+        norm(r.bank).includes(s) ||
+        norm(r.pollingUnit).includes(s) ||
+        norm(r.accountNumber).includes(s)
       )
     }
     data.sort((a, b) => {
@@ -112,16 +192,24 @@ export default function Dashboard() {
   // Analytics data
   const lgaStats = useMemo(() => {
     const map = {}
-    records.forEach(r => { if (r.lga) map[r.lga] = (map[r.lga] || 0) + 1 })
+    records.forEach(r => {
+      const key = r.lga?.trim()
+      if (key) map[key] = (map[key] || 0) + 1
+    })
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value)
   }, [records])
 
   const wardStats = useMemo(() => {
-    const lga = filters.lga || null
+    const lgaNorm = filters.lga ? norm(filters.lga) : null
     const map = {}
-    records.filter(r => !lga || r.lga === lga).forEach(r => {
-      if (r.ward) map[r.ward] = (map[r.ward] || 0) + 1
-    })
+    records
+      .filter(r => !lgaNorm || norm(r.lga) === lgaNorm)
+      .forEach(r => {
+        const raw = r.ward?.trim()
+        if (!raw) return
+        const key = WARD_ALIASES[norm(raw)] || raw.trim()
+        map[key] = (map[key] || 0) + 1
+      })
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 10)
   }, [records, filters.lga])
 

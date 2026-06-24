@@ -5,7 +5,7 @@ import { db, auth } from '../../firebase'
 import { useAuth } from '../../context/AuthContext'
 import { useNavigate, Link } from 'react-router-dom'
 import { format } from 'date-fns'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { LGAS, LGA_WARDS } from '../../data/lgaData'
 import toast from 'react-hot-toast'
 import styles from './Dashboard.module.css'
@@ -191,19 +191,27 @@ export default function Dashboard() {
 
   // Analytics data
   const lgaStats = useMemo(() => {
+    const validLgas = new Set(LGAS.map(l => l.toLowerCase()))
     const map = {}
     records.forEach(r => {
       const key = r.lga?.trim()
-      if (key) map[key] = (map[key] || 0) + 1
+      if (!key) return
+      // Skip if not a valid LGA name (catches dates or garbage values)
+      if (!validLgas.has(key.toLowerCase())) return
+      map[key] = (map[key] || 0) + 1
     })
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value)
   }, [records])
 
   const wardStats = useMemo(() => {
+    const validLgas = new Set(LGAS.map(l => l.toLowerCase()))
     const lgaNorm = filters.lga ? norm(filters.lga) : null
     const map = {}
     records
-      .filter(r => !lgaNorm || norm(r.lga) === lgaNorm)
+      .filter(r => {
+        if (!r.lga?.trim() || !validLgas.has(norm(r.lga))) return false
+        return !lgaNorm || norm(r.lga) === lgaNorm
+      })
       .forEach(r => {
         const raw = r.ward?.trim()
         if (!raw) return
@@ -222,14 +230,6 @@ export default function Dashboard() {
       map[key] = (map[key] || 0) + 1
     })
     return Object.entries(map).map(([date, count]) => ({ date, count })).slice(-14)
-  }, [records])
-
-  const bankStats = useMemo(() => {
-    const map = {}
-    records.forEach(r => {
-      if (r.bank?.trim()) map[r.bank.trim()] = (map[r.bank.trim()] || 0) + 1
-    })
-    return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value)
   }, [records])
 
   const completionRate = records.length ? Math.round((records.filter(r => r.vin || r.nin).length / records.length) * 100) : 0
@@ -827,32 +827,33 @@ export default function Dashboard() {
               <div className="card">
                 <h3 className={styles.cardTitle}>LGA Distribution</h3>
                 {lgaStats.length ? (
-                  <ResponsiveContainer width="100%" height={280}>
-                    <PieChart>
-                      <Pie data={lgaStats} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
-                        {lgaStats.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                      </Pie>
-                      <Tooltip />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  <>
+                    <ResponsiveContainer width="100%" height={Math.max(200, lgaStats.length * 44)}>
+                      <BarChart data={lgaStats} layout="vertical" margin={{ top: 0, right: 40, left: 0, bottom: 0 }}>
+                        <XAxis type="number" tick={{ fontSize: 11 }} allowDecimals={false} />
+                        <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={110} />
+                        <Tooltip formatter={(v) => [v, 'Members']} />
+                        <Bar dataKey="value" radius={[0, 6, 6, 0]} name="Members">
+                          {lgaStats.map((_, i) => (
+                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                    <div className={styles.chartLegend}>
+                      {lgaStats.map(({ name, value }, i) => (
+                        <div key={name} className={styles.legendItem}>
+                          <span className={styles.legendDot} style={{ background: COLORS[i % COLORS.length] }} />
+                          <span className={styles.legendName}>{name}</span>
+                          <span className={styles.legendVal}>{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 ) : <p className={styles.empty}>No data yet</p>}
               </div>
 
-              <div className="card">
-                <h3 className={styles.cardTitle}>Bank Distribution</h3>
-                {bankStats.length ? (
-                  <ResponsiveContainer width="100%" height={280}>
-                    <PieChart>
-                      <Pie data={bankStats} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100}>
-                        {bankStats.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                      </Pie>
-                      <Tooltip />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : <p className={styles.empty}>No bank data yet</p>}
-              </div>
+
 
               <div className="card" style={{ gridColumn: '1 / -1' }}>
                 <h3 className={styles.cardTitle}>Registration Trend (Last 14 Days)</h3>

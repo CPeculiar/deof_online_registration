@@ -1087,3 +1087,41 @@
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Chart Legend ── */
+.chartLegend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--gray-100);
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legendName {
+  flex: 1;
+  font-size: 13px;
+  color: var(--gray-700);
+  font-weight: 500;
+}
+
+.legendVal {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gray-800);
+  min-width: 28px;
+  text-align: right;
+}

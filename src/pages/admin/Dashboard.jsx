@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo } from 'react'
-import { collection, onSnapshot, query, orderBy, deleteDoc, doc } from 'firebase/firestore'
+import { useEffect, useState, useMemo, useRef } from 'react'
+import { collection, onSnapshot, query, orderBy, deleteDoc, doc, addDoc, serverTimestamp, getDocs, where, updateDoc } from 'firebase/firestore'
 import { signOut } from 'firebase/auth'
 import { db, auth } from '../../firebase'
 import { useAuth } from '../../context/AuthContext'
@@ -12,7 +12,18 @@ import styles from './Dashboard.module.css'
 
 const COLORS = ['#1a3a6b', '#c8972a', '#2563ab', '#16a34a', '#dc2626', '#7c3aed', '#0891b2']
 
-const TABS = ['Overview', 'Members', 'Analytics']
+const TABS = ['Overview', 'Members', 'Analytics', 'Import']
+
+// Safely convert any timestamp format (Firestore Timestamp, ISO string, ms) to JS Date
+const toDate = (ts) => {
+  if (!ts) return null
+  if (ts.seconds) return new Date(ts.seconds * 1000)
+  if (typeof ts === 'string' || typeof ts === 'number') {
+    const d = new Date(ts)
+    return isNaN(d.getTime()) ? null : d
+  }
+  return null
+}
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -20,10 +31,24 @@ export default function Dashboard() {
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('Overview')
-  const [filters, setFilters] = useState({ lga: '', ward: '', pollingUnit: '', search: '' })
+  const [filters, setFilters] = useState({ lga: '', ward: '', pollingUnit: '', search: '', source: '' })
   const [sortConfig, setSortConfig] = useState({ key: 'timestamp', dir: 'desc' })
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [editTarget, setEditTarget] = useState(null)
+  const [editForm, setEditForm] = useState({})
+  const [editSaving, setEditSaving] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
+  const [page, setPage] = useState(1)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const PAGE_SIZE = 20
+
+  // Import state
+  const [importRows, setImportRows] = useState([])
+  const [importStatus, setImportStatus] = useState(null) // null | 'previewing' | 'importing' | 'done'
+  const [importResult, setImportResult] = useState({ imported: 0, skipped: 0, errors: 0 })
+  const [importProgress, setImportProgress] = useState(0)
+  const fileRef = useRef(null)
 
   useEffect(() => {
     const q = query(collection(db, 'enrollments'), orderBy('timestamp', 'desc'))
@@ -46,6 +71,9 @@ export default function Dashboard() {
     if (filters.lga) data = data.filter(r => r.lga === filters.lga)
     if (filters.ward) data = data.filter(r => r.ward === filters.ward)
     if (filters.pollingUnit) data = data.filter(r => r.pollingUnit?.toLowerCase().includes(filters.pollingUnit.toLowerCase()))
+    if (filters.source) data = data.filter(r =>
+      filters.source === 'google_form' ? r.source === 'google_form' : !r.source || r.source !== 'google_form'
+    )
     if (filters.search) {
       const s = filters.search.toLowerCase()
       data = data.filter(r =>
@@ -58,8 +86,8 @@ export default function Dashboard() {
     data.sort((a, b) => {
       let av = a[sortConfig.key], bv = b[sortConfig.key]
       if (sortConfig.key === 'timestamp') {
-        av = a.timestamp?.seconds || 0
-        bv = b.timestamp?.seconds || 0
+        av = toDate(a.timestamp)?.getTime() || 0
+        bv = toDate(b.timestamp)?.getTime() || 0
       }
       if (av < bv) return sortConfig.dir === 'asc' ? -1 : 1
       if (av > bv) return sortConfig.dir === 'asc' ? 1 : -1
@@ -70,12 +98,16 @@ export default function Dashboard() {
 
   const sort = (key) => {
     setSortConfig(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
+    setPage(1)
   }
 
   const sortIcon = (key) => {
     if (sortConfig.key !== key) return ' ↕'
     return sortConfig.dir === 'asc' ? ' ↑' : ' ↓'
   }
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   // Analytics data
   const lgaStats = useMemo(() => {
@@ -96,9 +128,10 @@ export default function Dashboard() {
   const dailyStats = useMemo(() => {
     const map = {}
     records.forEach(r => {
-      if (!r.timestamp) return
-      const d = format(new Date(r.timestamp.seconds * 1000), 'MMM dd')
-      map[d] = (map[d] || 0) + 1
+      const d = toDate(r.timestamp)
+      if (!d) return
+      const key = format(d, 'MMM dd')
+      map[key] = (map[key] || 0) + 1
     })
     return Object.entries(map).map(([date, count]) => ({ date, count })).slice(-14)
   }, [records])
@@ -113,14 +146,70 @@ export default function Dashboard() {
 
   const completionRate = records.length ? Math.round((records.filter(r => r.vin || r.nin).length / records.length) * 100) : 0
   const withBank = records.length ? Math.round((records.filter(r => r.accountNumber).length / records.length) * 100) : 0
+  const fromGoogleForm = records.filter(r => r.source === 'google_form').length
+  const fromDeofForm = records.filter(r => !r.source || r.source !== 'google_form').length
 
   const handleDelete = async () => {
+    setDeleteLoading(true)
     try {
       await deleteDoc(doc(db, 'enrollments', deleteTarget))
       toast.success('Record deleted')
       setDeleteTarget(null)
     } catch {
       toast.error('Delete failed')
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  const openEdit = (record) => {
+    setEditTarget(record.id)
+    setEditForm({
+      name:          record.name || '',
+      phone:         record.phone || '',
+      lga:           record.lga || '',
+      ward:          record.ward || '',
+      pollingUnit:   record.pollingUnit || '',
+      accountNumber: record.accountNumber || '',
+      bank:          record.bank || '',
+      vin:           record.vin || '',
+      nin:           record.nin || '',
+    })
+  }
+
+  const handleEditChange = (e) => {
+    const { name, value } = e.target
+    setEditForm(prev => ({
+      ...prev,
+      [name]: value,
+      ...(name === 'lga' ? { ward: '' } : {}),
+    }))
+  }
+
+  const handleEditSave = async () => {
+    if (!editForm.name.trim() || !editForm.phone.trim() || !editForm.lga || !editForm.ward) {
+      toast.error('Name, Phone, LGA and Ward are required')
+      return
+    }
+    setEditSaving(true)
+    try {
+      await updateDoc(doc(db, 'enrollments', editTarget), {
+        name:          editForm.name.trim(),
+        phone:         editForm.phone.trim(),
+        lga:           editForm.lga,
+        ward:          editForm.ward,
+        pollingUnit:   editForm.pollingUnit.trim(),
+        accountNumber: editForm.accountNumber.trim(),
+        bank:          editForm.bank.trim(),
+        vin:           editForm.vin.trim(),
+        nin:           editForm.nin.trim(),
+      })
+      toast.success('Record updated successfully')
+      setEditTarget(null)
+    } catch (err) {
+      toast.error('Update failed. Please try again.')
+    } finally {
+      setEditSaving(false)
     }
   }
 
@@ -128,7 +217,7 @@ export default function Dashboard() {
     setExportLoading(true)
     const headers = ['Timestamp', 'Name', 'Phone', 'LGA', 'Ward', 'Polling Unit', 'Account Number', 'Bank', 'VIN', 'NIN']
     const rows = filtered.map(r => [
-      r.timestamp ? format(new Date(r.timestamp.seconds * 1000), 'yyyy-MM-dd HH:mm:ss') : '',
+      toDate(r.timestamp) ? format(toDate(r.timestamp), 'yyyy-MM-dd HH:mm:ss') : '',
       r.name, r.phone, r.lga, r.ward, r.pollingUnit, r.accountNumber, r.bank, r.vin, r.nin
     ].map(v => `"${v || ''}"`).join(','))
     const csv = [headers.join(','), ...rows].join('\n')
@@ -143,14 +232,104 @@ export default function Dashboard() {
     toast.success('Export complete!')
   }
 
-  const clearFilters = () => setFilters({ lga: '', ward: '', pollingUnit: '', search: '' })
+  const clearFilters = () => {
+    setFilters({ lga: '', ward: '', pollingUnit: '', search: '', source: '' })
+    setPage(1)
+  }
 
-  const fmtDate = (ts) => ts?.seconds ? format(new Date(ts.seconds * 1000), 'dd MMM yyyy, HH:mm') : '—'
+  // Reset to page 1 whenever filters/sort change
+  const setFiltersAndReset = (fn) => { setFilters(fn); setPage(1) }
+
+  const fmtDate = (ts) => {
+    const d = toDate(ts)
+    return d ? format(d, 'dd MMM yyyy, HH:mm') : '—'
+  }
+
+  // Excel serial date → JS Date
+  const excelDateToISO = (serial) => {
+    if (!serial || isNaN(serial)) return null
+    const utc = Math.round((serial - 25569) * 86400 * 1000)
+    return new Date(utc)
+  }
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      import('xlsx').then(XLSX => {
+        const wb = XLSX.read(evt.target.result, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const raw = XLSX.utils.sheet_to_json(ws, { header: 1 })
+        const rows = raw.slice(1).filter(r => r[1]) // skip header, require name
+        const parsed = rows.map(r => ({
+          timestamp:     excelDateToISO(r[0]),
+          name:          String(r[1] || '').trim(),
+          phone:         String(r[2] || '').trim(),
+          lga:           String(r[3] || '').trim(),
+          ward:          String(r[4] || '').trim(),
+          pollingUnit:   String(r[5] || '').trim(),
+          accountNumber: String(r[6] || '').trim(),
+          bank:          String(r[7] || '').trim(),
+          vin:           String(r[8] || '').trim(),
+          nin:           String(r[9] || '').trim(),
+          source:        'google_form',
+        }))
+        setImportRows(parsed)
+        setImportStatus('previewing')
+        setImportResult({ imported: 0, skipped: 0, errors: 0 })
+        setImportProgress(0)
+      })
+    }
+    reader.readAsArrayBuffer(file)
+  }
+
+  const runImport = async () => {
+    setImportStatus('importing')
+    let imported = 0, skipped = 0, errors = 0
+
+    for (let i = 0; i < importRows.length; i++) {
+      const row = importRows[i]
+      try {
+        // Deduplicate by phone number
+        if (row.phone) {
+          const snap = await getDocs(
+            query(collection(db, 'enrollments'), where('phone', '==', row.phone))
+          )
+          if (!snap.empty) { skipped++; setImportProgress(Math.round(((i + 1) / importRows.length) * 100)); continue }
+        }
+        await addDoc(collection(db, 'enrollments'), {
+          ...row,
+          timestamp: row.timestamp ? { seconds: Math.floor(row.timestamp.getTime() / 1000), nanoseconds: 0 } : serverTimestamp(),
+        })
+        imported++
+      } catch (err) {
+        console.error('Import error row', i, err)
+        errors++
+      }
+      setImportProgress(Math.round(((i + 1) / importRows.length) * 100))
+    }
+    setImportResult({ imported, skipped, errors })
+    setImportStatus('done')
+    if (imported > 0) toast.success(`${imported} records imported successfully!`)
+  }
+
+  const resetImport = () => {
+    setImportRows([])
+    setImportStatus(null)
+    setImportProgress(0)
+    if (fileRef.current) fileRef.current.value = ''
+  }
 
   return (
     <div className={styles.layout}>
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div className={styles.sidebarOverlay} onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* Sidebar */}
-      <aside className={styles.sidebar}>
+      <aside className={`${styles.sidebar} ${sidebarOpen ? styles.sidebarMobileOpen : ''}`}>
         <div className={styles.sidebarTop}>
           <img src="/deof_logo.jpeg" alt="DEOF" className={styles.sidebarLogo} />
           <div>
@@ -160,8 +339,8 @@ export default function Dashboard() {
         </div>
         <nav className={styles.nav}>
           {TABS.map(t => (
-            <button key={t} className={`${styles.navItem} ${tab === t ? styles.navActive : ''}`} onClick={() => setTab(t)}>
-              <span className={styles.navIcon}>{t === 'Overview' ? '⊞' : t === 'Members' ? '👥' : '📊'}</span>
+            <button key={t} className={`${styles.navItem} ${tab === t ? styles.navActive : ''}`} onClick={() => { setTab(t); setSidebarOpen(false) }}>
+              <span className={styles.navIcon}>{t === 'Overview' ? '⊞' : t === 'Members' ? '👥' : t === 'Analytics' ? '📊' : '📥'}</span>
               {t}
             </button>
           ))}
@@ -190,17 +369,117 @@ export default function Dashboard() {
               {tab === 'Overview' && 'Real-time membership statistics'}
               {tab === 'Members' && `${filtered.length} records ${filtered.length !== records.length ? `(${records.length} total)` : ''}`}
               {tab === 'Analytics' && 'Visual insights on enrollment data'}
+              {tab === 'Import' && 'Bulk import from Google Form Excel export'}
             </p>
           </div>
           <div className={styles.topBarActions}>
+            <button className={styles.hamburger} onClick={() => setSidebarOpen(o => !o)} aria-label="Menu">
+              <span /><span /><span />
+            </button>
             <div className={styles.liveIndicator}><span className={styles.liveDot} />Live</div>
             <button className="btn btn-accent btn-sm" onClick={exportCSV} disabled={exportLoading}>
-              ⬇ Export CSV
+              {exportLoading ? <><span className="btn-spinner" /> Exporting...</> : '⬇ Export'}
             </button>
           </div>
         </div>
 
-        {/* OVERVIEW TAB */}
+        {/* IMPORT TAB */}
+        {tab === 'Import' && (
+          <div className={styles.content}>
+            <div className="card" style={{ maxWidth: 680 }}>
+              <h3 className={styles.cardTitle}>Import from Google Form / Excel</h3>
+              <p style={{ fontSize: 13, color: 'var(--gray-500)', marginBottom: 20, lineHeight: 1.6 }}>
+                Upload the Excel (.xlsx) file downloaded from your Google Form responses sheet.
+                The system will automatically map columns, convert timestamps, and skip any records
+                whose phone number already exists in the database to prevent duplicates.
+              </p>
+
+              {/* Column map reference */}
+              <div className={styles.colMapTable}>
+                <div className={styles.colMapTitle}>Expected Column Order</div>
+                <div className={styles.colMapGrid}>
+                  {[['A','Timestamp'],['B','Name'],['C','Phone Number'],['D','Local Government'],['E','Ward'],['F','Polling Unit'],['G','Account Number'],['H','Bank'],['I','VIN'],['J','NIN']]
+                    .map(([col, field]) => (
+                      <div key={col} className={styles.colMapRow}>
+                        <span className={styles.colMapCol}>{col}</span>
+                        <span className={styles.colMapField}>{field}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {importStatus === null && (
+                <div className={styles.uploadArea} onClick={() => fileRef.current?.click()}>
+                  <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFileSelect} style={{ display: 'none' }} />
+                  <div className={styles.uploadIcon}>📂</div>
+                  <p className={styles.uploadText}>Click to select Excel file</p>
+                  <p className={styles.uploadSub}>.xlsx or .xls from Google Sheets export</p>
+                </div>
+              )}
+
+              {importStatus === 'previewing' && (
+                <div>
+                  <div className={styles.previewHeader}>
+                    <span className={styles.previewCount}>{importRows.length} rows detected</span>
+                    <button className="btn btn-outline btn-sm" onClick={resetImport}>✕ Clear</button>
+                  </div>
+                  <div className={styles.tableWrapper} style={{ maxHeight: 280, overflowY: 'auto', marginBottom: 20 }}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th>#</th><th>Name</th><th>Phone</th><th>LGA</th><th>Ward</th><th>Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importRows.map((r, i) => (
+                          <tr key={i}>
+                            <td>{i + 1}</td>
+                            <td className={styles.nameCell}>{r.name}</td>
+                            <td>{r.phone}</td>
+                            <td><span className="badge badge-info">{r.lga}</span></td>
+                            <td>{r.ward}</td>
+                            <td className={styles.dateCell}>{r.timestamp ? format(r.timestamp, 'dd MMM yyyy') : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className={styles.importActions}>
+                    <p style={{ fontSize: 12, color: 'var(--gray-400)' }}>Duplicates (same phone number) will be automatically skipped.</p>
+                    <button className="btn btn-primary" onClick={runImport}>🚀 Import {importRows.length} Records</button>
+                  </div>
+                </div>
+              )}
+
+              {importStatus === 'importing' && (
+                <div className={styles.importingState}>
+                  <div className={styles.progressBar}>
+                    <div className={styles.progressFill} style={{ width: `${importProgress}%` }} />
+                  </div>
+                  <p>{importProgress}% — Importing records, please wait...</p>
+                </div>
+              )}
+
+              {importStatus === 'done' && (
+                <div className={styles.importDone}>
+                  <div className={styles.importDoneGrid}>
+                    <div className={styles.importStat} style={{ background: '#dcfce7', color: '#15803d' }}>
+                      <strong>{importResult.imported}</strong><span>Imported</span>
+                    </div>
+                    <div className={styles.importStat} style={{ background: '#fef3c7', color: '#92400e' }}>
+                      <strong>{importResult.skipped}</strong><span>Skipped (duplicate)</span>
+                    </div>
+                    <div className={styles.importStat} style={{ background: '#fee2e2', color: '#991b1b' }}>
+                      <strong>{importResult.errors}</strong><span>Errors</span>
+                    </div>
+                  </div>
+                  <button className="btn btn-outline" onClick={resetImport} style={{ marginTop: 16 }}>Import Another File</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {tab === 'Overview' && (
           <div className={styles.content}>
             <div className={styles.statsGrid}>
@@ -223,6 +502,16 @@ export default function Dashboard() {
                 <div className={styles.statIcon}>🏦</div>
                 <div className={styles.statVal}>{withBank}%</div>
                 <div className={styles.statLabel}>With Bank Details</div>
+              </div>
+              <div className={`${styles.statCard} ${styles.statTeal}`}>
+                <div className={styles.statIcon}>📋</div>
+                <div className={styles.statVal}>{fromDeofForm}</div>
+                <div className={styles.statLabel}>Via DEOF Form</div>
+              </div>
+              <div className={`${styles.statCard} ${styles.statOrange}`}>
+                <div className={styles.statIcon}>🔗</div>
+                <div className={styles.statVal}>{fromGoogleForm}</div>
+                <div className={styles.statLabel}>Via Google Form</div>
               </div>
             </div>
 
@@ -283,18 +572,23 @@ export default function Dashboard() {
             {/* Filters */}
             <div className={`card ${styles.filterBar}`}>
               <input type="text" placeholder="🔍  Search name, phone, NIN, VIN..." value={filters.search}
-                onChange={e => setFilters(p => ({ ...p, search: e.target.value }))} style={{ maxWidth: 280 }} />
-              <select value={filters.lga} onChange={e => setFilters(p => ({ ...p, lga: e.target.value, ward: '' }))}>
+                onChange={e => setFiltersAndReset(p => ({ ...p, search: e.target.value }))} style={{ minWidth: 0, flex: '1 1 200px' }} />
+              <select value={filters.lga} onChange={e => setFiltersAndReset(p => ({ ...p, lga: e.target.value, ward: '' }))} style={{ minWidth: 0, flex: '1 1 130px' }}>
                 <option value="">All LGAs</option>
                 {LGAS.map(l => <option key={l} value={l}>{l}</option>)}
               </select>
-              <select value={filters.ward} onChange={e => setFilters(p => ({ ...p, ward: e.target.value }))} disabled={!filters.lga}>
+              <select value={filters.ward} onChange={e => setFiltersAndReset(p => ({ ...p, ward: e.target.value }))} disabled={!filters.lga} style={{ minWidth: 0, flex: '1 1 130px' }}>
                 <option value="">All Wards</option>
                 {wardOptions.map(w => <option key={w} value={w}>{w}</option>)}
               </select>
               <input type="text" placeholder="Polling unit..." value={filters.pollingUnit}
-                onChange={e => setFilters(p => ({ ...p, pollingUnit: e.target.value }))} style={{ maxWidth: 180 }} />
-              {(filters.lga || filters.ward || filters.pollingUnit || filters.search) && (
+                onChange={e => setFiltersAndReset(p => ({ ...p, pollingUnit: e.target.value }))} style={{ minWidth: 0, flex: '1 1 120px' }} />
+              <select value={filters.source} onChange={e => setFiltersAndReset(p => ({ ...p, source: e.target.value }))} style={{ minWidth: 0, flex: '1 1 120px' }}>
+                <option value="">All Sources</option>
+                <option value="deof_form">DEOF Form</option>
+                <option value="google_form">Google Form</option>
+              </select>
+              {(filters.lga || filters.ward || filters.pollingUnit || filters.search || filters.source) && (
                 <button className="btn btn-outline btn-sm" onClick={clearFilters}>✕ Clear</button>
               )}
             </div>
@@ -302,48 +596,100 @@ export default function Dashboard() {
             {/* Table */}
             <div className={`card ${styles.tableCard}`}>
               {loading ? (
-                <div className={styles.loadingMsg}>Loading records...</div>
+                <div className={styles.loadingMsg}>
+                  <span className={styles.loadingSpinner} />
+                  Loading records...
+                </div>
               ) : filtered.length === 0 ? (
                 <div className={styles.empty}>No records found</div>
               ) : (
-                <div className={styles.tableWrapper}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th onClick={() => sort('timestamp')} className={styles.sortable}>Date{sortIcon('timestamp')}</th>
-                        <th onClick={() => sort('name')} className={styles.sortable}>Name{sortIcon('name')}</th>
-                        <th>Phone</th>
-                        <th onClick={() => sort('lga')} className={styles.sortable}>LGA{sortIcon('lga')}</th>
-                        <th onClick={() => sort('ward')} className={styles.sortable}>Ward{sortIcon('ward')}</th>
-                        <th>Polling Unit</th>
-                        <th>Account No.</th>
-                        <th>Bank</th>
-                        <th>VIN</th>
-                        <th>NIN</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map(r => (
-                        <tr key={r.id}>
-                          <td className={styles.dateCell}>{fmtDate(r.timestamp)}</td>
-                          <td className={styles.nameCell}>{r.name}</td>
-                          <td>{r.phone}</td>
-                          <td><span className="badge badge-info">{r.lga}</span></td>
-                          <td>{r.ward}</td>
-                          <td>{r.pollingUnit || '—'}</td>
-                          <td>{r.accountNumber || '—'}</td>
-                          <td>{r.bank || '—'}</td>
-                          <td className={styles.idCell}>{r.vin || '—'}</td>
-                          <td className={styles.idCell}>{r.nin || '—'}</td>
-                          <td>
-                            <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(r.id)}>Delete</button>
-                          </td>
+                <>
+                  <div className={styles.tableWrapper}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th onClick={() => sort('timestamp')} className={styles.sortable}>Date{sortIcon('timestamp')}</th>
+                          <th onClick={() => sort('name')} className={styles.sortable}>Name{sortIcon('name')}</th>
+                          <th>Phone</th>
+                          <th onClick={() => sort('lga')} className={styles.sortable}>LGA{sortIcon('lga')}</th>
+                          <th onClick={() => sort('ward')} className={styles.sortable}>Ward{sortIcon('ward')}</th>
+                          <th>Polling Unit</th>
+                          <th>Account No.</th>
+                          <th>Bank</th>
+                          <th>VIN</th>
+                          <th>NIN</th>
+                          <th>Source</th>
+                          <th>Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {paginated.map(r => (
+                          <tr key={r.id}>
+                            <td className={styles.dateCell}>{fmtDate(r.timestamp)}</td>
+                            <td className={styles.nameCell}>{r.name}</td>
+                            <td>{r.phone}</td>
+                            <td><span className="badge badge-info">{r.lga}</span></td>
+                            <td>{r.ward}</td>
+                            <td>{r.pollingUnit || '—'}</td>
+                            <td>{r.accountNumber || '—'}</td>
+                            <td>{r.bank || '—'}</td>
+                            <td className={styles.idCell}>{r.vin || '—'}</td>
+                            <td className={styles.idCell}>{r.nin || '—'}</td>
+                            <td>
+                              {r.source === 'google_form'
+                                ? <span className="badge badge-warning">Google Form</span>
+                                : <span className="badge badge-success">DEOF Form</span>}
+                            </td>
+                            <td>
+                              <div className={styles.actionBtns}>
+                                <button className="btn btn-sm" style={{ background: 'var(--primary)', color: '#fff' }} onClick={() => openEdit(r)}>✏ Edit</button>
+                                <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(r.id)}>🗑</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination */}
+                  <div className={styles.pagination}>
+                    <span className={styles.pageInfo}>
+                      Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} records
+                    </span>
+                    <div className={styles.pageButtons}>
+                      <button className={styles.pageBtn} onClick={() => setPage(1)} disabled={page === 1} title="First page">
+                        «
+                      </button>
+                      <button className={styles.pageBtn} onClick={() => setPage(p => p - 1)} disabled={page === 1}>
+                        ← Previous
+                      </button>
+                      <div className={styles.pageNumbers}>
+                        {Array.from({ length: totalPages }, (_, i) => i + 1)
+                          .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                          .reduce((acc, p, idx, arr) => {
+                            if (idx > 0 && arr[idx - 1] !== p - 1) acc.push('...')
+                            acc.push(p)
+                            return acc
+                          }, [])
+                          .map((p, i) => p === '...' ? (
+                            <span key={`ellipsis-${i}`} className={styles.pageEllipsis}>…</span>
+                          ) : (
+                            <button key={p} className={`${styles.pageNumBtn} ${p === page ? styles.pageNumActive : ''}`} onClick={() => setPage(p)}>
+                              {p}
+                            </button>
+                          ))
+                        }
+                      </div>
+                      <button className={styles.pageBtn} onClick={() => setPage(p => p + 1)} disabled={page === totalPages}>
+                        Next →
+                      </button>
+                      <button className={styles.pageBtn} onClick={() => setPage(totalPages)} disabled={page === totalPages} title="Last page">
+                        »
+                      </button>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -466,7 +812,99 @@ export default function Dashboard() {
             <p>Are you sure you want to permanently delete this record? This action cannot be undone.</p>
             <div className={styles.modalActions}>
               <button className="btn btn-outline" onClick={() => setDeleteTarget(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleDelete}>Delete</button>
+              <button className="btn btn-danger" onClick={handleDelete} disabled={!!deleteLoading}>
+                {deleteLoading ? <><span className="btn-spinner" /> Deleting...</> : '🗑 Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {editTarget && (
+        <div className={styles.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) setEditTarget(null) }}>
+          <div className={styles.editModal}>
+            <div className={styles.editModalHeader}>
+              <div>
+                <h3>Edit Member Record</h3>
+                <p>Update the member's information below</p>
+              </div>
+              <button className={styles.editModalClose} onClick={() => setEditTarget(null)}>✕</button>
+            </div>
+
+            <div className={styles.editModalBody}>
+              <div className={styles.editSection}>
+                <div className={styles.editSectionTitle}>Personal Information</div>
+                <div className={styles.editGrid2}>
+                  <div className={styles.editField}>
+                    <label>Full Name <span className={styles.editReq}>*</span></label>
+                    <input type="text" name="name" value={editForm.name} onChange={handleEditChange} placeholder="Full name" />
+                  </div>
+                  <div className={styles.editField}>
+                    <label>Phone Number <span className={styles.editReq}>*</span></label>
+                    <input type="tel" name="phone" value={editForm.phone} onChange={handleEditChange} placeholder="Phone number" />
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.editSection}>
+                <div className={styles.editSectionTitle}>Location</div>
+                <div className={styles.editGrid2}>
+                  <div className={styles.editField}>
+                    <label>Local Government Area <span className={styles.editReq}>*</span></label>
+                    <select name="lga" value={editForm.lga} onChange={handleEditChange}>
+                      <option value="">-- Select LGA --</option>
+                      {LGAS.map(l => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                  </div>
+                  <div className={styles.editField}>
+                    <label>Ward <span className={styles.editReq}>*</span></label>
+                    <select name="ward" value={editForm.ward} onChange={handleEditChange} disabled={!editForm.lga}>
+                      <option value="">{editForm.lga ? '-- Select Ward --' : 'Select LGA first'}</option>
+                      {(editForm.lga ? LGA_WARDS[editForm.lga] : []).map(w => <option key={w} value={w}>{w}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className={styles.editField} style={{ marginTop: 14 }}>
+                  <label>Polling Unit</label>
+                  <input type="text" name="pollingUnit" value={editForm.pollingUnit} onChange={handleEditChange} placeholder="Polling unit" />
+                </div>
+              </div>
+
+              <div className={styles.editSection}>
+                <div className={styles.editSectionTitle}>Bank Details</div>
+                <div className={styles.editGrid2}>
+                  <div className={styles.editField}>
+                    <label>Account Number</label>
+                    <input type="text" name="accountNumber" value={editForm.accountNumber} onChange={handleEditChange} placeholder="Account number" maxLength={10} />
+                  </div>
+                  <div className={styles.editField}>
+                    <label>Bank Name</label>
+                    <input type="text" name="bank" value={editForm.bank} onChange={handleEditChange} placeholder="e.g. UBA, GTBank" />
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.editSection}>
+                <div className={styles.editSectionTitle}>Identification</div>
+                <div className={styles.editGrid2}>
+                  <div className={styles.editField}>
+                    <label>VIN — Voter ID Number</label>
+                    <input type="text" name="vin" value={editForm.vin} onChange={handleEditChange} placeholder="VIN" />
+                  </div>
+                  <div className={styles.editField}>
+                    <label>NIN — National ID Number</label>
+                    <input type="text" name="nin" value={editForm.nin} onChange={handleEditChange} placeholder="NIN" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.editModalFooter}>
+              <button className="btn btn-outline" onClick={() => setEditTarget(null)} disabled={editSaving}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleEditSave} disabled={editSaving}>
+                {editSaving ? <><span className={styles.editSpinner} /> Saving...</> : '✓ Save Changes'}
+              </button>
             </div>
           </div>
         </div>

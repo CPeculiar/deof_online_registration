@@ -1,28 +1,29 @@
 export const LGA_WARDS = {
   Aguata: [
-    'Achina I', 'Achina II', 'Aguluezechukwu', 'Akpo', 'Amesi',
-    'Ekwulobia I', 'Ekwulobia II', 'Ezinifite', 'Igbo-Ukwu I', 'Igbo-Ukwu II',
-    'Isuofia', 'Nkpologwu', 'Oraeri', 'Uga',
+    'Achina I', 'Achina II', 'Aguluezechukwu', 'Akpo I', 'Akpo II', 'Amesi',
+    'Ekwulobia I', 'Ekwulobia II', 'Ekwulobia III', 'Ezinifite',
+    'Igbo-Ukwu I', 'Igbo-Ukwu II', 'Ikenga', 'Isuofia',
+    'Nkpologwu', 'Oraeri', 'Uga I', 'Uga II', 'Umuchu I', 'Umuchu II',
   ],
   Ekwusigo: [
-    'Amakwa/Ozubulu I', 'Amakwa/Ozubulu II', 'Ichi I', 'Ichi II',
-    'Ihembosi/Anaubahu', 'Ihembosi/Umuohi', 'Oraifite I', 'Oraifite II',
-    'Oraifite III', 'Ozubulu III', 'Ozubulu IV', 'Ozubulu V',
+    'Ozubulu I', 'Ozubulu II', 'Ozubulu III', 'Ozubulu IV',
+    'Oraifite I', 'Oraifite II', 'Oraifite III', 'Oraifite IV',
+    'Ichi I', 'Ichi II', 'Ihembosi I', 'Ihembosi II',
   ],
   Ihiala: [
-    'Amorka I', 'Amorka II', 'Azia', 'Ihiala I', 'Ihiala II', 'Ihiala III',
-    'Isseke', 'Lilu I', 'Lilu II', 'Mbosi I', 'Mbosi II', 'Okija I', 'Okija II',
-    'Okija III', 'Orsumoghu I', 'Orsumoghu II', 'Ubuluisiuzor', 'Uli I', 'Uli II', 'Uli III',
+    'Amorka I', 'Amorka II', 'Azia', 'Ihiala I', 'Ihiala II', 'Ihiala III', 'Ihiala IV',
+    'Isseke', 'Mbosi', 'Okija I', 'Okija II', 'Okija III', 'Okija IV', 'Okija V',
+    'Orsumoghu I', 'Orsumoghu II', 'Ubuluisiuzor', 'Uli I', 'Uli II', 'Lilu',
   ],
   'Nnewi North': [
     'Otolo I', 'Otolo II', 'Otolo III', 'Uruagu I', 'Uruagu II',
-    'Umudim I', 'Umudim II', 'Nnewichi I', 'Nnewichi II', 'Nnewichi III',
+    'Umudim I', 'Umudim II', 'Nnewi-Ichi I', 'Nnewi-Ichi II', 'Nnewi-Ichi III',
   ],
   'Nnewi South': [
-    'Akwaihedi', 'Amichi I', 'Amichi II', 'Azigbo I', 'Azigbo II',
-    'Ebenator', 'Ekwulumili', 'Ezinifite', 'Osumenyi I', 'Osumenyi II',
-    'Ukpor I', 'Ukpor II', 'Ukpor III', 'Ukpor IV', 'Ukpor V',
-    'Unubi I', 'Unubi II', 'Utuh I', 'Utuh II', 'Utuh III',
+    'Akwa-Ihedi', 'Amichi I', 'Amichi II', 'Amichi III', 'Azigbo (Azuigbo)',
+    'Ebenator', 'Ekwulumili', 'Ezinifite I', 'Ezinifite II', 'Ezinifite III',
+    'Osumenyi I', 'Osumenyi II', 'Ukpor I', 'Ukpor II', 'Ukpor III',
+    'Ukpor IV', 'Ukpor V', 'Ukpor VI', 'Unubi', 'Utuh',
   ],
   'Orumba North': [
     'Ajalli I', 'Ajalli II', 'Amaetiti', 'Awgbu I', 'Awgbu II', 'Awa',

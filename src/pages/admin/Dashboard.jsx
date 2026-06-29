@@ -379,13 +379,6 @@ export default function Dashboard() {
     for (let i = 0; i < importRows.length; i++) {
       const row = importRows[i]
       try {
-        // Deduplicate by phone number
-        if (row.phone) {
-          const snap = await getDocs(
-            query(collection(db, 'enrollments'), where('phone', '==', row.phone))
-          )
-          if (!snap.empty) { skipped++; setImportProgress(Math.round(((i + 1) / importRows.length) * 100)); continue }
-        }
         await addDoc(collection(db, 'enrollments'), {
           ...row,
           timestamp: row.timestamp ? { seconds: Math.floor(row.timestamp.getTime() / 1000), nanoseconds: 0 } : serverTimestamp(),
@@ -533,7 +526,7 @@ export default function Dashboard() {
                     </table>
                   </div>
                   <div className={styles.importActions}>
-                    <p style={{ fontSize: 12, color: 'var(--gray-400)' }}>Duplicates (same phone number) will be automatically skipped.</p>
+                    <p style={{ fontSize: 12, color: 'var(--gray-400)' }}>All records will be imported without duplicate checks.</p>
                     <button className="btn btn-primary" onClick={runImport}>🚀 Import {importRows.length} Records</button>
                   </div>
                 </div>

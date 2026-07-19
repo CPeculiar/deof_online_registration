@@ -6,7 +6,7 @@ export const LGA_WARDS = {
     'Nkpologwu', 'Oraeri', 'Uga I', 'Uga II', 'Umuchu I', 'Umuchu II',
   ],
   Ekwusigo: [
-    'Ozubulu I', 'Ozubulu II', 'Ozubulu III', 'Ozubulu IV',
+    'Ozubulu I', 'Ozubulu II', 'Ozubulu III', 'Ozubulu IV', 'Ozubulu V',
     'Oraifite I', 'Oraifite II', 'Oraifite III', 'Oraifite IV',
     'Ichi I', 'Ichi II', 'Ihembosi I', 'Ihembosi II',
   ],

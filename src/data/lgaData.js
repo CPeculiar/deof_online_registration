@@ -13,7 +13,7 @@ export const LGA_WARDS = {
   Ihiala: [
     'Amorka I', 'Amorka II', 'Azia', 'Ihiala I', 'Ihiala II', 'Ihiala III', 'Ihiala IV',
     'Isseke', 'Mbosi', 'Okija I', 'Okija II', 'Okija III', 'Okija IV', 'Okija V',
-    'Orsumoghu I', 'Orsumoghu II', 'Ubuluisiuzor', 'Uli I', 'Uli II', 'Lilu',
+    'Orsumoghu', 'Ubuluisiuzor', 'Uli I', 'Uli II', 'Lilu',
   ],
   'Nnewi North': [
     'Otolo I', 'Otolo II', 'Otolo III', 'Uruagu I', 'Uruagu II',

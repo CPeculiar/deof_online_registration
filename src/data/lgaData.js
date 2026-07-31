@@ -6,12 +6,12 @@ export const LGA_WARDS = {
     'Nkpologwu', 'Oraeri', 'Uga I', 'Uga II', 'Umuchu I', 'Umuchu II',
   ],
   Ekwusigo: [
-    'Ozubulu I', 'Ozubulu II', 'Ozubulu III', 'Ozubulu IV', 'Ozubulu V',
-    'Oraifite I', 'Oraifite II', 'Oraifite III', 'Oraifite IV',
-    'Ichi I', 'Ichi II', 'Ihembosi I', 'Ihembosi II',
+    'Ozubulu I', 'Ozubulu II', 'Ozubulu III', 'Ozubulu IV', 'Ozubulu V', 'Ozubulu VI',
+    'Oraifite I', 'Oraifite II', 'Oraifite III',
+    'Ichi', 'Ihembosi I', 'Ihembosi II',
   ],
   Ihiala: [
-    'Amorka I', 'Amorka II', 'Azia', 'Ihiala I', 'Ihiala II', 'Ihiala III', 'Ihiala IV',
+    'Amorka I', 'Amorka II', 'Amuamu', 'Azia', 'Ihiala I', 'Ihiala II', 'Ihiala III', 'Ihiala IV',
     'Isseke', 'Mbosi', 'Okija I', 'Okija II', 'Okija III', 'Okija IV', 'Okija V',
     'Orsumoghu', 'Ubuluisiuzor', 'Uli I', 'Uli II', 'Lilu',
   ],

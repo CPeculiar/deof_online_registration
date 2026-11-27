@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isStr(v, min, max) {
+      return v is string && v.size() >= min && v.size() <= max;
+    }
+
+    // Public enrollment form: anyone can create, only signed-in admins can read/manage
+    match /enrollments/{docId} {
+      allow create: if true;
+      allow read, update, delete: if signedIn();
+    }
+
+    // Public party agent form (/agents): anyone can create a well-formed submission,
+    // only signed-in admins can read/manage. Separate from enrollments.
+    match /partyAgents/{docId} {
+      allow create: if
+        request.resource.data.keys().hasOnly(
+          ['name', 'phone', 'lga', 'ward', 'pollingUnit', 'uploads', 'submissionType', 'timestamp'])
+        && request.resource.data.keys().hasAll(
+          ['name', 'phone', 'lga', 'ward', 'pollingUnit', 'uploads', 'timestamp'])
+        && isStr(request.resource.data.name, 1, 200)
+        && isStr(request.resource.data.phone, 1, 30)
+        && isStr(request.resource.data.lga, 1, 100)
+        && isStr(request.resource.data.ward, 1, 100)
+        && isStr(request.resource.data.pollingUnit, 1, 200)
+        && request.resource.data.uploads is list
+        && request.resource.data.uploads.size() <= 10
+        && request.resource.data.timestamp == request.time;
+      allow read, update, delete: if signedIn();
+    }
+
+    // Everything else (users, members, events, auditLogs, ...): signed-in admins only
+    match /{document=**} {
+      allow read, write: if signedIn();
+    }
+  }
+}

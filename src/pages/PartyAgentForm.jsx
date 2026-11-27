@@ -1,12 +1,50 @@
 import { useState } from 'react'
 import { doc, collection, setDoc, serverTimestamp } from 'firebase/firestore'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
-import { db, storage } from '../firebase'
+import { db } from '../firebase'
 import { LGAS, LGA_WARDS } from '../data/lgaData'
 import toast from 'react-hot-toast'
 import styles from './EnrollmentForm.module.css'
 
 const INITIAL = { name: '', phone: '', lga: '', ward: '', pollingUnit: '' }
+
+const UPLOAD_URL = import.meta.env.VITE_AGENT_UPLOAD_URL
+const UPLOAD_KEY = import.meta.env.VITE_AGENT_UPLOAD_KEY
+const MAX_FILE_BYTES = 10 * 1024 * 1024
+const MAX_FILES = 10
+const EXT_TYPES = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+
+const mimeOf = (file) => file.type || EXT_TYPES[file.name.split('.').pop().toLowerCase()] || ''
+
+const toBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+  reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
+  reader.readAsDataURL(file)
+})
+
+// Sends one file to the Google Apps Script web app, which saves it to Google Drive.
+// text/plain avoids a CORS preflight, which Apps Script does not support.
+const uploadToDrive = async (file, folderName) => {
+  const res = await fetch(UPLOAD_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      key: UPLOAD_KEY,
+      folderName,
+      fileName: file.name,
+      mimeType: mimeOf(file),
+      data: await toBase64(file),
+    }),
+  })
+  const out = await res.json().catch(() => ({ ok: false, error: `Upload server error (${res.status})` }))
+  if (!out.ok) throw new Error(`${file.name}: ${out.error || 'upload failed'}`)
+  return out
+}
 
 export default function PartyAgentForm() {
   const [form, setForm] = useState(INITIAL)
@@ -24,6 +62,9 @@ export default function PartyAgentForm() {
     if (!form.ward) e.ward = 'Please select a ward'
     if (!form.pollingUnit.trim()) e.pollingUnit = 'Polling unit is required'
     if (!files.length) e.files = 'Please upload at least one file'
+    else if (files.length > MAX_FILES) e.files = `You can upload at most ${MAX_FILES} files`
+    else if (files.some(f => f.size > MAX_FILE_BYTES)) e.files = 'Each file must be 10 MB or smaller'
+    else if (files.some(f => !mimeOf(f))) e.files = 'Only PDF, Word, JPG and PNG files are allowed'
     return e
   }
 
@@ -44,21 +85,26 @@ export default function PartyAgentForm() {
     const errs = validate()
     if (Object.keys(errs).length) { setErrors(errs); return }
 
+    if (!UPLOAD_URL || !UPLOAD_KEY) {
+      toast.error('File upload is not configured. Contact the administrator.')
+      return
+    }
+
     setSubmitting(true)
     try {
       const agentRef = doc(collection(db, 'partyAgents'))
+      const folderName = `${form.lga} - ${form.ward} - ${form.name.trim()} - ${agentRef.id}`
       const uploads = []
 
       for (const file of files) {
-        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-        const fileRef = ref(storage, `partyAgents/${agentRef.id}/${Date.now()}_${safeName}`)
-        await uploadBytes(fileRef, file)
+        const saved = await uploadToDrive(file, folderName)
         uploads.push({
           name: file.name,
-          type: file.type,
+          type: mimeOf(file),
           size: file.size,
-          url: await getDownloadURL(fileRef),
-          path: fileRef.fullPath,
+          driveFileId: saved.id,
+          url: saved.url,
+          folderUrl: saved.folderUrl,
         })
       }
 
@@ -73,10 +119,8 @@ export default function PartyAgentForm() {
       })
       setSubmitted(true)
     } catch (err) {
-      console.error('Party agent submission error:', err.code, err.message)
-      toast.error(err.code === 'storage/unauthorized'
-        ? 'File upload is not permitted. Contact the administrator.'
-        : `Submission failed: ${err.message}`)
+      console.error('Party agent submission error:', err)
+      toast.error(`Submission failed: ${err.message}`)
     } finally {
       setSubmitting(false)
     }

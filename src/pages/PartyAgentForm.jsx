@@ -214,7 +214,7 @@ export default function PartyAgentForm() {
           </div>
 
           <div className={styles.submitRow}>
-            <p className={styles.privacyNote}>🔒 Uploaded files and agent details are stored securely.</p>
+            <p className={styles.privacyNote}>🔒 Uploaded files and agent details are stored securely</p>
             <button type="submit" className={styles.submitBtn} disabled={submitting}>{submitting ? <><span className={styles.spinner} /> Submitting...</> : 'Submit Party Agent'}</button>
           </div>
         </form>

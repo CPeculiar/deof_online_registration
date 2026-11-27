@@ -6,6 +6,7 @@ import AdminLogin from './pages/admin/AdminLogin'
 import AdminRegister from './pages/admin/AdminRegister'
 import Dashboard from './pages/admin/Dashboard'
 import ProtectedRoute from './components/ProtectedRoute'
+import PartyAgentForm from './pages/PartyAgentForm'
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
               <Dashboard />
             </ProtectedRoute>
           } />
+          <Route path="/agents" element={<PartyAgentForm />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
